@@ -5,29 +5,27 @@ import { registerApodTool } from './tools/apod.js';
 import { registerMarsTool } from './tools/mars.js';
 import { registerAsteroidsTool } from './tools/asteroids.js';
 
-const server = new McpServer({
-  name: 'nasa-mcp',
-  version: '1.0.0',
-});
-
-registerApodTool(server);
-registerMarsTool(server);
-registerAsteroidsTool(server);
-
-// Stateless transport: no session tracking, any number of concurrent clients
-const transport = new StreamableHTTPServerTransport({
-  sessionIdGenerator: undefined,
-});
-
-await server.connect(transport);
+function createServer() {
+  const server = new McpServer({ name: 'nasa-mcp', version: '1.0.0' });
+  registerApodTool(server);
+  registerMarsTool(server);
+  registerAsteroidsTool(server);
+  return server;
+}
 
 const app = express();
 app.use(express.json());
 
-// Single endpoint handles both GET (SSE stream) and POST (tool calls)
+// Stateless: each HTTP request gets its own server+transport pair.
+// This is required because the MCP SDK treats a transport as a 1:1 client
+// connection — reusing one transport across requests causes initialize to fail.
 app.all('/mcp', async (req, res) => {
   try {
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    const server = createServer();
+    await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
+    res.on('finish', () => server.close().catch(() => {}));
   } catch (err) {
     console.error('MCP request error:', err);
     if (!res.headersSent) res.status(500).json({ error: 'Internal server error' });
